@@ -29,6 +29,7 @@ unit textData =		 { "",							1, 1, 255,	0, NA };
 	// characters
 unit zombieData = { "textures/zombie.png",			2, 2, 1,	2, ZOMBIE };
 unit squidData = { "textures/squid.png", 			2, 2, 1,	0, SQUID};
+unit bossData = { "textures/boss.png",				1, 1, 2,	0, BOSS};
 
 unit playerData = { "textures/knightAnimation.png", 4, 4, 3,	6, PLAYER_CHAR };
 
@@ -82,8 +83,9 @@ std::vector <Character*>::iterator enemyIterator;
 std::vector <Projectile*> ::iterator projectileIterator;
 
 
-// define score here so the variable can be used in multiple functions
+// define score / level here so the variable can be used in multiple functions
 int score;
+int level;
 
 int main(int argc, char* args[])
 {
@@ -241,7 +243,7 @@ bool mainGame()
 
 	
 
-	int level = 1;
+	level = 1;
 	score = 0;
 	Player player(background.centreX(), background.centreY(), NULL, NULL, playerData);
 	Actor uiScore(tileWidth * (BACKGROUND_TILES_X / 4), tileHeight / 4, NULL, NULL, uiScoreData);
@@ -375,13 +377,22 @@ bool mainGame()
 			// create treasure if in last room of bottom floor
 			if (currentRoom->getFloorNum() == floorsPerLevel - 1 && currentRoom->bossRoom())
 			{
-				treasure.render(game.renderer);
-
-				if (SDL_HasIntersection(&player.getCollisionRect(), &treasure.getCollisionRect()))
+				if (currentRoom->enemyList.size() <= 0)
 				{
-					// end level if treasure picked up
-					score += 10;
-					levelInProgress = false;
+					treasure.setCentreX(background.centreX());
+					treasure.setCentreY(background.centreY());
+					treasure.render(game.renderer);
+
+					if (SDL_HasIntersection(&player.getCollisionRect(), &treasure.getCollisionRect()))
+					{
+						// end level if treasure picked up
+						score += 10;
+						levelInProgress = false;
+					}
+				}
+				else {
+					// BOSS BATTLE
+					moveEnemies(currentRoom->enemyList, &player, currentRoom);
 				}
 			}
 
@@ -406,8 +417,13 @@ bool mainGame()
 				}
 			}
 
-			// players gains brief invincibility after taking damage, here we check how long they've been invincible and remove is nessecary
+			// characters gains brief invincibility after taking damage, here we check how long they've been invincible and remove is nessecary
 			player.checkInvincibilityTimer(thisLoopTime);
+
+			for each (Character* c in currentRoom->enemyList)
+			{
+				c->checkInvincibilityTimer(thisLoopTime);
+			}
 
 			// checks enemy collision, calculate enemy health, delete dead enemies, render alive enemies, move enemies
 			moveEnemies(currentRoom->enemyList, &player, currentRoom);
@@ -472,6 +488,9 @@ bool mainGame()
 		if (!gameOver)
 		{
 			level++;
+
+			// boss difficulty up
+			bossData.health++;
 
 			// every level, either increase size of level or number of enemies
 			if (level % 2 == 0)
@@ -1046,6 +1065,13 @@ std::vector <std::vector <Room>> generateLevelRooms(int roomsPerFloor, int floor
 		if (i == floorsPerLevel - 1)
 		{
 			roomList[i][exitRoom].setBossRoom();
+
+			Character* boss = new Character(0, 0, background.actorWidth() / 12, background.actorHeight() / 5, bossData);
+			boss->setLocation(background.centreX() - boss->actorWidth() / 2, background.centreY() - boss->actorHeight() / 2);
+
+			roomList[i][exitRoom].enemyList.push_back(boss);
+
+
 		}
 		else
 		{
@@ -1064,7 +1090,7 @@ std::vector <std::vector <Room>> generateLevelRooms(int roomsPerFloor, int floor
 			roomRangeHighest = exitRoom;
 		}
 
-		// calculate how many extra rooms are on each side of the nessacery rooms
+		// calculate how many extra rooms are on each side of the nessecary rooms
 		lowestToZero = roomRangeLowest;
 		highestToLimit = (roomsPerFloor - 1) - roomRangeHighest;
 
@@ -1112,7 +1138,7 @@ std::vector <std::vector <Room>> generateLevelRooms(int roomsPerFloor, int floor
 			roomList[i][j].setDoorLocations();
 			
 			// create enemies in each room
-			if (!(i == 0 && roomList[i][j].location().entrance) && !roomList[i][j].isUnused())
+			if (!(i == 0 && roomList[i][j].location().entrance) && !roomList[i][j].isUnused() && !roomList[i][j].bossRoom())
 			{
 				int numOfEnemies = rand() % maxEnemies;
 				numOfEnemies++;
@@ -1361,7 +1387,14 @@ void moveEnemies(std::vector<Character*>& e, Player *p, Room *r)
 		}
 
 		SDL_Rect rect = { (*enemyIterator)->getAnimationFrame() * (*enemyIterator)->actorWidth(), spritesheetY, (*enemyIterator)->actorWidth(), (*enemyIterator)->actorHeight() };
+		if ((*enemyIterator)->getID() == BOSS)
+		{
+			// render boss enemy without clipRect, is causes it to render wrong
+			(*enemyIterator)->render(game.renderer);
+		}
+		else {
 		(*enemyIterator)->render(game.renderer, NULL, NULL, &rect);
+		}
 
 		switch ((*enemyIterator)->getID())
 		{
@@ -1387,9 +1420,45 @@ void moveEnemies(std::vector<Character*>& e, Player *p, Room *r)
 				r->projectileList.back()->setLocation(r->projectileList.back()->setCentreX((*enemyIterator)->centreX()), r->projectileList.back()->setCentreY((*enemyIterator)->centreY()));
 			}
 			break;
+		case BOSS:
+			Character* boss = r->enemyList[0];
+
+			int numOfProjectiles = level + 3;
+
+			if (thisLoopTime - boss->getLastAttackTime() >= 1500)
+			{
+				bool targettedPlayer = false;
+				Projectile playerTargettingProjectile(boss->centreX(), boss->centreY(), NULL, NULL, squidProjectileData, p->centreX(), p->centreY());
+				for (int i = 0; i < numOfProjectiles; i++)
+				{
+					//create projectile		
+					int projectileAngle = rand() % 360;
+					int projTargetX, projTargetY;
+
+					// one projectile of every volley directly targets the player
+					if (!targettedPlayer)
+					{
+						projTargetX = p->centreX();
+						projTargetY = p->centreY();
+						targettedPlayer = true;
+					}
+					else
+					{
+						projTargetX = background.actorWidth() * sin(projectileAngle);
+						projTargetY = background.actorHeight() * cos(projectileAngle);
+					}
+
+					Projectile* p = new Projectile(boss->centreX(), boss->centreY(), NULL, NULL, squidProjectileData, projTargetX, projTargetY);
+					r->projectileList.push_back(p);
+					r->projectileList.back()->loadTexture(game.renderer);
+					r->projectileList.back()->setLocation(r->projectileList.back()->setCentreX(boss->centreX()), r->projectileList.back()->setCentreY(boss->centreY()));
+				}
+
+				boss->setLastAttackTime(thisLoopTime);
+			}
 		}
 
-		//iterate at the end of the loop so that it doesn't iterate if we delete an enemy from the vector
+		//iterate at the end of the loop, this way it doesn't iterate if we delete an enemy from the vector
 		enemyIterator++;
 	}
 }
